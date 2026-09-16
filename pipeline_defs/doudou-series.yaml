@@ -1,0 +1,225 @@
+name: doudou-series
+version: "1.0"
+description: >
+  Character-driven AI narrative series pipeline. Turns a story synopsis into
+  a fully-voiced, character-consistent vertical short drama using local H3
+  Reference-to-Video generation (portrait lock + TTS-driven lip-sync),
+  Blender spatial blueprints for cross-shot continuity, and a failure-mode
+  QA repair loop. Designed for Pixar-style series like 豆豆历险记.
+category: narrative-series
+stability: beta
+default_checkpoint_policy: guided
+
+reference_input:
+  supported: true
+  analysis_depth: standard
+  analysis_tools:
+    - video_analyzer
+    - frame_sampler
+
+extensions:
+  custom_scripts: true
+  custom_playbooks: true
+  custom_skills: true
+  custom_tools: true
+
+required_skills:
+  - h3-refav-local
+  - indie-qa
+  - indie-tts2
+  - blueprint
+  - pipelines/doudou-series/executive-producer
+  - pipelines/doudou-series/script-director
+  - pipelines/doudou-series/blueprint-director
+  - pipelines/doudou-series/character-lock-director
+  - pipelines/doudou-series/firstframe-director
+  - pipelines/doudou-series/generation-director
+  - pipelines/doudou-series/qa-director
+  - pipelines/doudou-series/compose-director
+  - meta/checkpoint-protocol
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/doudou-series/executive-producer
+  budget_default_usd: 0.00
+  budget_note: "All generation is local (ComfyUI + IndexTTS2); zero API cost"
+  max_revisions_per_stage: 4
+  max_send_backs: 3
+  max_wall_time_minutes: 480
+
+stages:
+  - name: script
+    skill: pipelines/doudou-series/script-director
+    produces:
+      - script_json
+    tools_available:
+      - cloud_llm_writer
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - "Schema enums locked: character and space names from project vocabulary only"
+      - "line/action separation: line is spoken text, action is stage direction never reaching TTS"
+      - "Dialogue coverage <=40%; emotional peaks have no dialogue"
+      - "Animals do not speak; animal sounds go to sfx field"
+      - "Every dialogue line has emo, emo_voice, and target_dur"
+    success_criteria:
+      - "Schema-valid script.json with all enum values from project vocabulary"
+      - "Zero stage-direction leakage in any line field"
+      - "Every character has a language fingerprint"
+
+  - name: blueprint
+    skill: pipelines/doudou-series/blueprint-director
+    required_artifacts_in:
+      - script_json
+    produces:
+      - world_blend
+      - depth_maps
+      - camviews
+      - camera_map
+    tools_available:
+      - blender_headless
+    checkpoint_required: false
+    human_approval_default: false
+    review_focus:
+      - "Every depth PNG non-blank (std > threshold)"
+      - "Every camview shows the intended space (VLM check)"
+      - "Depth maps use distance-based grey, black regions floored to 110/255"
+      - "camera_map.json covers every shot"
+    success_criteria:
+      - "All depth/camview files exist and pass blank/coverage checks"
+      - "camera_map.json validated against script spaces"
+
+  - name: character_lock
+    skill: pipelines/doudou-series/character-lock-director
+    required_artifacts_in:
+      - script_json
+    produces:
+      - character_portraits
+      - character_cards
+    tools_available:
+      - flux_generation
+      - vlm_validator
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - "VLM reverse-validation passes: portrait matches character card exactly"
+      - "ONE canonical portrait per character; no variants in circulation"
+      - "Portrait style matches the series render style (Pixar 3D)"
+    success_criteria:
+      - "Every character has exactly one frozen portrait that passed VLM check"
+      - "character_cards.md frozen; all downstream stages reference these"
+
+  - name: firstframes
+    skill: pipelines/doudou-series/firstframe-director
+    required_artifacts_in:
+      - script_json
+      - camera_map
+      - depth_maps
+      - character_cards
+    produces:
+      - firstframes
+    tools_available:
+      - flux_cn_depth
+      - vlm_validator
+      - failure_classifier
+    checkpoint_required: false
+    human_approval_default: false
+    review_focus:
+      - "Subject is the script character (not another character)"
+      - "Scene matches the shot space field"
+      - "Era-appropriate props (no smartphones in period settings)"
+      - "No burned text"
+    success_criteria:
+      - "Every shot has a first frame that passed VLM content check"
+      - "Failed frames regenerated with classified fix, not blind reseed"
+      - "Frames failing 4 times marked skipped, not silently used"
+
+  - name: dialogue_audio
+    skill: pipelines/doudou-series/dialogue-audio-director
+    required_artifacts_in:
+      - script_json
+    produces:
+      - tts_segments
+    tools_available:
+      - indie_tts2
+    checkpoint_required: false
+    human_approval_default: false
+    review_focus:
+      - "use_emo_text=True was passed (not silently dropped)"
+      - "Duration <= shot window minus 0.4s lead-in (atempo fallback <=1.35x)"
+      - "Voice reference clip per character, consistent across lines"
+    success_criteria:
+      - "All dialogue lines have WAV files meeting duration constraints"
+      - "Emotion vector was applied (verify in server log, not assumed)"
+
+  - name: shots
+    skill: pipelines/doudou-series/generation-director
+    required_artifacts_in:
+      - script_json
+      - firstframes
+      - character_portraits
+      - tts_segments
+      - camera_map
+    produces:
+      - shot_videos
+      - qa_log
+    tools_available:
+      - comfyui_video
+      - h3_refav_local
+      - rapidocr_checker
+      - failure_classifier
+    checkpoint_required: false
+    human_approval_default: false
+    review_focus:
+      - "Dialogue shots use ref_av mode (portraits + TTS audio)"
+      - "Empty shots use I2V with full-appearance MCSLA prompt"
+      - "Every shot passed OCR + fast check; failures classified and repaired"
+      - "Max 4 attempts per shot; skipped shots tracked, not hidden"
+    success_criteria:
+      - "All shots generated and passed quality gates (or marked skipped)"
+      - "qa_log records every attempt: shot, seed, failure type, fix"
+      - "No known-bad first frame was fed into generation"
+
+  - name: final_qa
+    skill: pipelines/doudou-series/qa-director
+    required_artifacts_in:
+      - shot_videos
+      - script_json
+    produces:
+      - mage_qa_report
+      - contact_sheet
+    tools_available:
+      - mage_vl
+      - contact_sheet_builder
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - "Mage-VL full-sequence check passed (content matches script)"
+      - "Contact sheet human review completed (the ONLY mandatory human-eye gate)"
+      - "Failed shots classified and either repaired or explicitly accepted"
+    success_criteria:
+      - "mage_qa_report complete for all shots"
+      - "Contact sheet reviewed; failures either fixed or waived with note"
+
+  - name: compose
+    skill: pipelines/doudou-series/compose-director
+    required_artifacts_in:
+      - shot_videos
+      - tts_segments
+      - script_json
+    produces:
+      - final_cut
+    tools_available:
+      - ffmpeg_concat
+      - ffmpeg_mix
+    checkpoint_required: false
+    human_approval_default: false
+    review_focus:
+      - "Zero subtitles burned into video"
+      - "No BGM (ambient bed only, -32dB)"
+      - "SFX placed at script sfx field timestamps (not random)"
+      - "Audio loudness healthy (max <= -0.5dB, no clipping)"
+    success_criteria:
+      - "Final MP4 exists, duration matches sum of shots"
+      - "Audio passes loudness scan"
+      - "ffprobe confirms video stream, audio stream, and duration"
