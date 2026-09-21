@@ -212,6 +212,36 @@ BUNDLED_MODEL_STACKS: dict[str, list[dict[str, Any]]] = {
             ),
         },
     ],
+        "qwen21-txt2img": [
+        {
+            "role": "diffusion_model",
+            "name": "qwen_image_2.1_bf16.safetensors",
+            "quantization": "BF16",
+            "destination_hint": "ComfyUI/models/diffusion_models/",
+            "download_url": (
+                "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/tree/main/"
+                "diffusion_models"
+            ),
+        },
+        {
+            "role": "text_encoder",
+            "name": "qwen3vl_8b_int8_convrot.safetensors",
+            "quantization": "INT8 ConvRot",
+            "destination_hint": "ComfyUI/models/text_encoders/",
+            "download_url": (
+                "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/tree/main/"
+                "text_encoders"
+            ),
+        },
+        {
+            "role": "vae",
+            "name": "qwen_image_2.1_vae_bf16.safetensors",
+            "destination_hint": "ComfyUI/models/vae/",
+            "download_url": (
+                "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/tree/main/vae"
+            ),
+        },
+    ],
     "ace-step-1-t2a": [
         {
             "role": "checkpoint",
